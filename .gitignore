@@ -1,0 +1,14 @@
+bin/
+obj/
+.vs/
+.vscode/
+.idea/
+
+*.user
+
+# I have no idea why these are here or what they're for, but you guys need to get your stuff sorted out.
+*.idx
+FETCH_HEAD
+*.pack
+refs/remotes/origin/ArmorEnchantAndBags
+FETCH_HEAD

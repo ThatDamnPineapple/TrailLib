@@ -3,10 +3,11 @@ using Microsoft.Xna.Framework.Graphics;
 using System;
 using System.Collections.Generic;
 using Terraria;
+using System.Linq;
 
 namespace TrailLib
 {
-	public class Primitives : IDisposable
+    public class Primitives : IDisposable 
     {
         public bool IsDisposed { get; private set; }
 
@@ -29,7 +30,7 @@ namespace TrailLib
             }
         }
 
-        public void Render(Effect effect)
+        public void Render(Effect effect, Matrix translation, Matrix view)
         {
             if (vertexBuffer is null || indexBuffer is null)
                 return;
@@ -37,11 +38,41 @@ namespace TrailLib
             device.SetVertexBuffer(vertexBuffer);
             device.Indices = indexBuffer;
 
+            //view.Translation *= RenderTargetsManager.RTSize;
+            //view.Right *= RenderTargetsManager.RTSize;
+            //view.Up *= RenderTargetsManager.RTSize;
+            //translation.Translation *= 1 / RenderTargetsManager.RTSize;
+
+            Matrix projection = Matrix.CreateOrthographicOffCenter(0, Main.screenWidth, Main.screenHeight, 0, -1, 1);
+
+            //if (RenderTargetsManager.NoViewMatrixPrims)
+             //   view = Matrix.Identity;
+
+            if (effect is BasicEffect baseEffect)
+            {
+                baseEffect.View = view;
+                baseEffect.Projection = projection;
+                baseEffect.World = translation;
+            }
+            else
+            {
+                effect.Parameters["uWorldViewProjection"].SetValue(translation * view * projection);
+            }
+
             foreach (EffectPass pass in effect.CurrentTechnique.Passes)
             {
                 pass.Apply();
                 device.DrawIndexedPrimitives(PrimitiveType.TriangleList, 0, 0, vertexBuffer.VertexCount, 0, indexBuffer.IndexCount / 3);
             }
+        }
+
+
+        public void Render(Effect effect, Matrix translation)
+        {
+            if (vertexBuffer is null || indexBuffer is null)
+                return;
+
+            Render(effect, translation, Main.GameViewMatrix.TransformationMatrix);
         }
 
         public void SetVertices(VertexPositionColorTexture[] vertices)
@@ -74,24 +105,26 @@ namespace TrailLib
 
     public delegate float TrailWidthFunction(float factorAlongTrail);
 
-    public delegate Color TrailColorFunction(Vector2 textureCoordinates);
+    public delegate Color TrailColorFunction(float factorAlongTrail);
 
-    public class Trail : IDisposable
+    public class PrimitiveTrail : IDisposable
     {
         private readonly Primitives primitives;
 
-        private readonly int maxPointCount;
+        internal readonly int maxPointCount;
 
-        private readonly ITrailTip tip;
+        internal readonly ITrailTip tip;
 
-        private readonly TrailWidthFunction trailWidthFunction;
+        internal readonly TrailWidthFunction trailWidthFunction;
 
-        private readonly TrailColorFunction trailColorFunction;
+        internal readonly TrailColorFunction trailColorFunction;
+
+        private readonly BasicEffect baseEffect;
 
         /// <summary>
         /// Array of positions that define the trail. NOTE: Positions[Positions.Length - 1] is assumed to be the start (e.g. Projectile.Center) and Positions[0] is assumed to be the end.
         /// </summary>
-        public Vector2[] Positions 
+        public Vector2[] Positions
         {
             get => positions;
             set
@@ -114,7 +147,7 @@ namespace TrailLib
 
         private const float defaultWidth = 16;
 
-        public Trail(GraphicsDevice device, int maxPointCount, ITrailTip tip, TrailWidthFunction trailWidthFunction, TrailColorFunction trailColorFunction)
+        public PrimitiveTrail(int maxPointCount, TrailWidthFunction trailWidthFunction, TrailColorFunction trailColorFunction, ITrailTip tip = null)
         {
             this.tip = tip ?? new NoTip();
 
@@ -138,14 +171,20 @@ namespace TrailLib
              * Finally, since each triangle is defined by 3 indices, there are 6(n - 1) indices, plus the tip's count.
              */
 
-            primitives = new Primitives(device, (maxPointCount * 2) + this.tip.ExtraVertices, (6 * (maxPointCount - 1)) + this.tip.ExtraIndices);
+            primitives = new Primitives(Main.graphics.GraphicsDevice, (maxPointCount * 2) + this.tip.ExtraVertices, (6 * (maxPointCount - 1)) + this.tip.ExtraIndices);
+
+            baseEffect = new BasicEffect(Main.graphics.GraphicsDevice)
+            {
+                VertexColorEnabled = true,
+                TextureEnabled = false
+            };
         }
 
         private void GenerateMesh(out VertexPositionColorTexture[] vertices, out short[] indices, out int nextAvailableIndex)
         {
             VertexPositionColorTexture[] verticesTemp = new VertexPositionColorTexture[maxPointCount * 2];
 
-            List<short> indicesTemp = new List<short>();
+            short[] indicesTemp = new short[maxPointCount * 6 - 6];
 
             // k = 0 indicates starting at the end of the trail (furthest from the origin of it).
             for (int k = 0; k < Positions.Length; k++)
@@ -157,7 +196,7 @@ namespace TrailLib
                 float width = trailWidthFunction?.Invoke(factorAlongTrail) ?? defaultWidth;
 
                 Vector2 current = Positions[k];
-                Vector2 next = (k == Positions.Length - 1 ? Positions[Positions.Length - 1] + (Positions[Positions.Length - 1] - Positions[Positions.Length - 2]) : Positions[k + 1]);   
+                Vector2 next = (k == Positions.Length - 1 ? Positions[Positions.Length - 1] + (Positions[Positions.Length - 1] - Positions[Positions.Length - 2] ) : Positions[k + 1]);
 
                 Vector2 normalToNext = (next - current).SafeNormalize(Vector2.Zero);
                 Vector2 normalPerp = normalToNext.RotatedBy(MathHelper.PiOver2);
@@ -183,8 +222,8 @@ namespace TrailLib
                 Vector2 texCoordC = new Vector2(factorAlongTrail, 1);
 
                 // Calculates the color for each vertex based on its texture coordinates. This acts like a very simple shader (for more complex effects you can use the actual shader).
-                Color colorA = trailColorFunction?.Invoke(texCoordA) ?? Color.White;
-                Color colorC = trailColorFunction?.Invoke(texCoordC) ?? Color.White;
+                Color colorA = trailColorFunction?.Invoke(factorAlongTrail) ?? Color.White;
+                Color colorC = trailColorFunction?.Invoke(factorAlongTrail) ?? Color.White;
 
                 /* 0---1---2
                  * |  /|  /|
@@ -206,29 +245,23 @@ namespace TrailLib
              */
             for (short k = 0; k < maxPointCount - 1; k++)
             {
-                short[] tris = new short[]
-                {
-                    /* 0---1
-                     * |  /|
-                     * A / B
-                     * |/  |
-                     * 2---3
-                     * 
-                     * This illustration is the most basic set of points (where n = 2).
-                     * In this, we want to make triangles (2, 3, 1) and (1, 0, 2).
-                     * Generalising this, if we consider A to be k = 0 and B to be k = 1, then the indices we want are going to be (k + n, k + n + 1, k + 1) and (k + 1, k, k + n)
-                     */
+                /* 0---1
+                 * |  /|
+                 * A / B
+                 * |/  |
+                 * 2---3
+                 * 
+                 * This illustration is the most basic set of points (where n = 2).
+                 * In this, we want to make triangles (2, 3, 1) and (1, 0, 2).
+                 * Generalising this, if we consider A to be k = 0 and B to be k = 1, then the indices we want are going to be (k + n, k + n + 1, k + 1) and (k + 1, k, k + n)
+                 */
 
-                    (short)(k + maxPointCount), 
-                    (short)(k + maxPointCount + 1), 
-                    (short)(k + 1),
-
-                    (short)(k + 1),
-                    k,
-                    (short)(k + maxPointCount)
-                };
-
-                indicesTemp.AddRange(tris);
+                indicesTemp[k * 6] = (short)(k + maxPointCount);
+                indicesTemp[k * 6 + 1] = (short)(k + maxPointCount + 1);
+                indicesTemp[k * 6 + 2] = (short)(k + 1);
+                indicesTemp[k * 6 + 3] = (short)(k + 1);
+                indicesTemp[k * 6 + 4] = k;
+                indicesTemp[k * 6 + 5] = (short)(k + maxPointCount);
             }
 
             // The next available index will be the next value after the count of points (starting at 0).
@@ -237,7 +270,7 @@ namespace TrailLib
             vertices = verticesTemp;
 
             // Maybe we could use an array instead of a list for the indices, if someone figures out how to add indices to an array properly.
-            indices = indicesTemp.ToArray();
+            indices = indicesTemp;
         }
 
         private void SetupMeshes()
@@ -252,24 +285,83 @@ namespace TrailLib
             primitives.SetIndices(mainIndices.FastUnion(tipIndices));
         }
 
-        public void Render(Effect effect)
+        public void Render(Effect effect = null, Vector2? offset = null)
         {
-            if (Positions == null && !(primitives?.IsDisposed ?? true)) 
+            Vector2 offset_ = offset.GetValueOrDefault();
+            Render(effect, Matrix.CreateTranslation(offset_.Vec3()));
+        }
+
+        public void Render(Effect effect = null, Matrix? translation = null)
+        {
+            if (Positions == null && !(primitives?.IsDisposed ?? true))
             {
                 return;
             }
 
-            SetupMeshes();
+            Main.instance.GraphicsDevice.RasterizerState = RasterizerState.CullNone;
 
-            primitives.Render(effect);
+            SetupMeshes();
+            if (!translation.HasValue)
+                translation = Matrix.CreateTranslation(-Main.screenPosition.Vec3());
+
+            if (effect == null)
+            {
+                effect = baseEffect;
+            }
+
+            primitives.Render(effect, translation.Value);
         }
 
         public void Dispose()
         {
             primitives?.Dispose();
         }
+
+        /// <summary>
+        /// Sets the current positions of the trail to a given array of points
+        /// Automatically generates more points if the provided array doesn't contain enough positions, using the provided retrieval function
+        /// </summary>
+        /// <param name="points">List of points the primitive trail moves across</param>
+        /// <param name="retrievalFunction">Retrieval function used to generate more points to fill in the gaps</param>
+        public void SetPositions(IEnumerable<Vector2> points, TrailUtils.TrailPointRetrievalFunction retrievalFunction = null)
+        {
+            if (retrievalFunction is null)
+                retrievalFunction = TrailUtils.RigidPointRetreivalFunction;
+
+            List<Vector2> trailPoints = retrievalFunction(points, maxPointCount);
+            if (trailPoints.Count != maxPointCount)
+                return;
+
+            Positions = trailPoints.ToArray();
+        }
+
+        /// <summary>
+        /// Just like SetPositions() but if the list of points has any zeros, it will instead make them use the earliest position thats valid in the list
+        /// </summary>
+        public void SetPositionsSmart(IEnumerable<Vector2> points, Vector2 fallBack, TrailUtils.TrailPointRetrievalFunction retrievalFunction = null)
+        {
+            if (!points.Contains(Vector2.Zero))
+            {
+                SetPositions(points, retrievalFunction);
+                return;
+            }
+
+            Vector2 lastValidPoint = fallBack;
+            List<Vector2> pointList = new List<Vector2>();
+            for (int i = points.Count() - 1; i >= 0; i--)
+            {
+                if (points.ElementAt(i) != Vector2.Zero)
+                    lastValidPoint = points.ElementAt(i);
+
+                pointList.Add(lastValidPoint);
+            }
+            pointList.Reverse();
+
+            SetPositions(pointList, retrievalFunction);
+        }
     }
 
+    #region Trail tips
     public class NoTip : ITrailTip
     {
         public int ExtraVertices => 0;
@@ -319,9 +411,9 @@ namespace TrailLib
             Vector2 texCoordB = Vector2.One;
             Vector2 texCoordC = new Vector2(1, 0.5f);//this fixes the texture being skewed off to the side
 
-            Color colorA = trailColorFunction?.Invoke(texCoordA) ?? Color.White;
-            Color colorB = trailColorFunction?.Invoke(texCoordB) ?? Color.White;
-            Color colorC = trailColorFunction?.Invoke(texCoordC) ?? Color.White;
+            Color colorA = trailColorFunction?.Invoke(1) ?? Color.White;
+            Color colorB = trailColorFunction?.Invoke(1) ?? Color.White;
+            Color colorC = trailColorFunction?.Invoke(1) ?? Color.White;
 
             vertices = new VertexPositionColorTexture[]
             {
@@ -330,11 +422,11 @@ namespace TrailLib
                 new VertexPositionColorTexture(c.Vec3(), colorC, texCoordC)
             };
 
-            indices = new short[] 
-            { 
-                (short)startFromIndex, 
-                (short)(startFromIndex + 1), 
-                (short)(startFromIndex + 2) 
+            indices = new short[]
+            {
+                (short)startFromIndex,
+                (short)(startFromIndex + 1),
+                (short)(startFromIndex + 2)
             };
         }
     }
@@ -382,7 +474,7 @@ namespace TrailLib
 
             Vector2 fanCenterTexCoord = new Vector2(1, 0.5f);
 
-            vertices[0] = new VertexPositionColorTexture(trailTipPosition.Vec3(), (trailColorFunction?.Invoke(fanCenterTexCoord) ?? Color.White) * 0.75f, fanCenterTexCoord);
+            vertices[0] = new VertexPositionColorTexture(trailTipPosition.Vec3(), (trailColorFunction?.Invoke(1f) ?? Color.White) * 0.75f, fanCenterTexCoord);
 
             List<short> indicesTemp = new List<short>();
 
@@ -394,13 +486,14 @@ namespace TrailLib
                 // Rotates by pi/2 - (factor * pi) so that when the factor is 0 we get B and when it is 1 we get E.
                 float angle = MathHelper.PiOver2 - (rotationFactor * MathHelper.Pi);
 
+
                 Vector2 circlePoint = trailTipPosition + (trailTipNormal.RotatedBy(angle) * (trailWidthFunction?.Invoke(1) ?? 1));
 
                 // Handily, the rotation factor can also be used as a texture coordinate because it is a measure of how far around the tip a point is.
                 Vector2 circleTexCoord = new Vector2(rotationFactor, 1);
 
                 // The transparency must be changed a bit so it looks right when overlapped
-                Color circlePointColor = (trailColorFunction?.Invoke(new Vector2(1, 0)) ?? Color.White) * rotationFactor * 0.85f;
+                Color circlePointColor = (trailColorFunction?.Invoke(1f) ?? Color.White) * rotationFactor * 0.85f;
 
                 vertices[k + 1] = new VertexPositionColorTexture(circlePoint.Vec3(), circlePointColor, circleTexCoord);
 
@@ -417,8 +510,8 @@ namespace TrailLib
                      */
 
                     //before the fix, I believe these being in the wrong order was what prevented it from drawing
-                    (short)startFromIndex, 
-                    (short)(startFromIndex + k + 2), 
+                    (short)startFromIndex,
+                    (short)(startFromIndex + k + 2),
                     (short)(startFromIndex + k + 1)
                 };
 
@@ -440,7 +533,7 @@ namespace TrailLib
                 Vector2 circleTexCoord = new Vector2(rotationFactor, 0);
 
                 // The transparency must be changed a bit so it looks right when overlapped
-                Color circlePointColor = ((trailColorFunction?.Invoke(new Vector2(1, 0)) ?? Color.White) * rotationFactor * 0.75f);
+                Color circlePointColor = ((trailColorFunction?.Invoke(1f) ?? Color.White) * rotationFactor * 0.75f);
 
                 vertices[k + 1] = new VertexPositionColorTexture(circlePoint.Vec3(), circlePointColor, circleTexCoord);
 
@@ -469,4 +562,82 @@ namespace TrailLib
             indices = indicesTemp.ToArray();
         }
     }
+    #endregion
+
+    #region Point retrieval functions
+    public static partial class TrailUtils
+    {
+        public delegate List<Vector2> TrailPointRetrievalFunction(IEnumerable<Vector2> originalPositions, int totalTrailPoints);
+
+        public static List<Vector2> RigidPointRetreivalFunction(IEnumerable<Vector2> originalPositions, int totalTrailPoints)
+        {
+            List<Vector2> basePoints = originalPositions.Where(originalPosition => originalPosition != Vector2.Zero).ToList();
+            List<Vector2> endPoints = new List<Vector2>();
+
+            if (basePoints.Count < 2)
+            {
+                return basePoints;
+            }
+
+            float totalLenght = 0f;
+            for (int i = 1; i < originalPositions.Count(); i++)
+                totalLenght += (originalPositions.ElementAt(i) - originalPositions.ElementAt(i - 1)).Length();
+
+            float stepDistance = totalLenght / (float)totalTrailPoints;
+            float distanceToTravel = 0f;
+            float distanceTravelled = 0f;
+            float currentIndexDistance = 0f;
+            int currentIndex = 0;
+
+            while (endPoints.Count() < totalTrailPoints - 1)
+            {
+                float distanceToNext = (originalPositions.ElementAt(currentIndex) - originalPositions.ElementAt(currentIndex + 1)).Length();
+                float nextIndexDistance = currentIndexDistance + distanceToNext;
+
+                while (distanceTravelled + distanceToTravel > nextIndexDistance)
+                {
+                    currentIndex++;
+                    currentIndexDistance += distanceToNext;
+
+                    distanceToTravel -= distanceToNext;
+                    distanceTravelled += distanceToNext;
+
+                    distanceToNext = (originalPositions.ElementAt(currentIndex) - originalPositions.ElementAt(currentIndex + 1)).Length(); 
+                    nextIndexDistance = currentIndexDistance + distanceToNext;
+                }
+
+                distanceTravelled += distanceToTravel;
+
+                float percentOfTheWayTillTheNextPoint = (distanceTravelled - currentIndexDistance) / distanceToNext;
+                endPoints.Add(Vector2.Lerp(originalPositions.ElementAt(currentIndex), originalPositions.ElementAt(currentIndex + 1), percentOfTheWayTillTheNextPoint));
+
+
+                distanceToTravel = stepDistance;
+            }
+
+            endPoints.Add(originalPositions.Last());
+
+            return endPoints;
+        }
+
+        // NOTE: Beziers can be laggy when a lot of control points are used, since our implementation
+        // uses a recursive Lerp that gets more computationally expensive the more original indices.
+        // n(n + 1)/2 linear interpolations to be precise, where n is the amount of original indices.
+        public static List<Vector2> SmoothBezierPointRetreivalFunction(IEnumerable<Vector2> originalPositions, int totalTrailPoints)
+        {
+            List<Vector2> controlPoints = new List<Vector2>();
+            for (int i = 0; i < originalPositions.Count(); i++)
+            {
+                // Don't incorporate points that are zeroed out.
+                // They are almost certainly a result of incomplete oldPos arrays.
+                if (originalPositions.ElementAt(i) == Vector2.Zero)
+                    continue;
+                controlPoints.Add(originalPositions.ElementAt(i));
+            }
+
+            BezierCurve bezierCurve = new BezierCurve(controlPoints.ToArray());
+            return controlPoints.Count <= 1 ? controlPoints : bezierCurve.GetEvenlySpacedPoints(totalTrailPoints);
+        }
+    }
+    #endregion
 }

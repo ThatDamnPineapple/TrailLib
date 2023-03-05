@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "gguxnEaGLhRq2fKTf/XQAgsZ7l4rq/kmBGI1L303nb6Za4HT+xmkUE6nmZrQXkkMR5OlIEglIDTbH3QhVa3iBA==",
+  "dgSpecHash": "YW/sPwBUut7Y+Cld3BMNNp3mlYj88EibNkB92x8EeQTRgPPayLxiv0RK+0Ho/eLIuL5jUT38MJASWu0RLHhGLg==",
   "success": true,
-  "projectFilePath": "C:\\Users\\Graydee\\Documents\\My Games\\Terraria\\tModLoader\\ModSources\\TrailLib\\TrailLib.csproj",
+  "projectFilePath": "C:\\Users\\colto\\Documents\\My Games\\Terraria\\tModLoader\\ModSources\\TrailLib\\TrailLib.csproj",
   "expectedPackageFiles": [
-    "C:\\Users\\Graydee\\.nuget\\packages\\tmodloader.codeassist\\0.1.5\\tmodloader.codeassist.0.1.5.nupkg.sha512"
+    "C:\\Users\\colto\\.nuget\\packages\\tmodloader.codeassist\\0.1.5\\tmodloader.codeassist.0.1.5.nupkg.sha512"
   ],
   "logs": []
 }

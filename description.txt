@@ -1,1 +1,3 @@
-Trail Library is a pretty cool mod, it does...this. Modify this file with a description of your mod.
+Trail Library is a library for primitive drawing. Allows for easy use of primitive drawing in a good balance between customizability and streamlining
+
+Check out our github for more info: https://github.com/ThatDamnPineapple/TrailLib/wiki
